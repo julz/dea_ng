@@ -28,6 +28,13 @@ describe Buildpacks::Buildpack, type: :buildpack do
       build_pack.should_receive(:save_buildpack_info).ordered
       build_pack.stage_application
     end
+
+    it "exits with an error status and message (rather than a stack trace) if a user-facing exception is thrown" do
+      Dir.should_receive(:chdir).with(File.expand_path "fakedestdir").and_yield
+      build_pack.stub(:create_app_directories).and_raise Buildpacks::UserFacingError.new("something something")
+      STDOUT.should_receive(:puts).with(/FAILED: something something/)
+      expect { build_pack.stage_application }.to raise_error SystemExit
+    end
   end
 
   describe "#create_app_directories" do
@@ -187,7 +194,7 @@ describe Buildpacks::Buildpack, type: :buildpack do
         it "raises an error" do
           expect {
             buildpack_info
-          }.to raise_error("Unable to detect a supported application type")
+          }.to raise_error(Buildpacks::NoBuildpackDetected)
         end
       end
     end

@@ -55,6 +55,9 @@ module Buildpacks
 
         save_buildpack_info
       end
+    rescue UserFacingError => e
+      puts "\nFAILED: #{e}"
+      exit 1
     end
 
     def create_app_directories
@@ -98,7 +101,7 @@ module Buildpacks
           buildpack_with_key(specified_buildpack_key)
         else
           detected_buildpack = installers.find(&:detect)
-          raise "Unable to detect a supported application type" unless detected_buildpack
+          raise NoBuildpackDetected.new unless detected_buildpack
           detected_buildpack
         end
       end
@@ -143,6 +146,15 @@ module Buildpacks
       end
 
       procfile.web || release_info.fetch("default_process_types", {})["web"]
+    end
+  end
+
+  class UserFacingError < RuntimeError
+  end
+
+  class NoBuildpackDetected < UserFacingError
+    def to_s
+      "We couldn't stage the application because none of the installed buildpacks knows how to stage the application."
     end
   end
 end
