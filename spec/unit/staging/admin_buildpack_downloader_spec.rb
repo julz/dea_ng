@@ -81,8 +81,6 @@ describe AdminBuildpackDownloader do
       expect {
         do_download
       }.to raise_error
-
-      expect(Pathname.new(destination_directory).children).to have(0).item
     end
   end
 
