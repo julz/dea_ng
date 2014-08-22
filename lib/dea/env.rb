@@ -29,7 +29,7 @@ module Dea
     end
 
     def exported_system_environment_variables
-      to_export(system_environment_variables)
+      to_escaped_export(system_environment_variables)
     end
 
     def exported_user_environment_variables
@@ -37,7 +37,7 @@ module Dea
     end
 
     def exported_environment_variables
-      to_export(system_environment_variables + user_environment_variables)
+      exported_system_environment_variables + exported_user_environment_variables
     end
 
     private
@@ -81,6 +81,10 @@ module Dea
 
     def translate_env(env)
       env ? env.map { |e| e.split("=", 2) } : []
+    end
+
+    def to_escaped_export(env)
+      @env_exporter.new(env).export_escaped
     end
 
     def to_export(env)

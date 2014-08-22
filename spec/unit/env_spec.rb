@@ -7,12 +7,6 @@ require "dea/starting/start_message"
 require "dea/staging/staging_message"
 
 describe Dea::Env do
-  class NullExporter < Struct.new(:variables)
-    def export
-      variables.inject({}) { |h, a| h[a[0]] = a[1]; h }
-    end
-  end
-
   let(:strategy) do
     double("strategy",
            vcap_application: {"fake vcap_application key" => "fake vcap_application value"},
@@ -23,7 +17,7 @@ describe Dea::Env do
 
   let(:strategy_chooser) { double("strategy chooser", strategy: strategy) }
 
-  let(:env_exporter) { NullExporter }
+  let(:env_exporter) { Dea::Env::Exporter }
 
   let(:service) do
     {
@@ -53,12 +47,12 @@ describe Dea::Env do
       "limits" => {
         "mem" => 512,
       },
-      "vcap_application" => {
-        "message vcap_application key" => "message vcap_application value",
-      },
+      "vcap_application" => start_message_vcap_application,
       "env" => user_provided_environment,
     )
   end
+
+  let(:start_message_vcap_application) { { "message vcap_application key" => "message vcap_application value" } }
 
   subject(:env) { Dea::Env.new(start_message, instance, env_exporter, strategy_chooser) }
 
@@ -116,30 +110,31 @@ describe Dea::Env do
 
   describe "#exported_system_environment_variables" do
     let(:exported_system_vars) { env.exported_system_environment_variables }
+    let(:evaluated_system_vars) { `#{exported_system_vars} env` }
 
     it "includes the system_environment_variables from the strategy" do
-      exported_system_vars["fake_key"].should match("fake_value")
+      evaluated_system_vars.should include("fake_key=fake_value")
     end
 
     it "exports MEMORY_LIMIT" do
-      exported_system_vars["MEMORY_LIMIT"].should match("512m")
+      evaluated_system_vars.should include("MEMORY_LIMIT=512m")
     end
 
     it "exports VCAP_APPLICATION containing strategy vcap_application" do
-      exported_system_vars["VCAP_APPLICATION"].should match('"fake vcap_application key":"fake vcap_application value"')
+      evaluated_system_vars.should match('VCAP_APPLICATION={.*"fake vcap_application key":"fake vcap_application value".*}')
     end
 
     it "exports VCAP_APPLICATION containing message vcap_application" do
-      exported_system_vars["VCAP_APPLICATION"].should match('"message vcap_application key":"message vcap_application value"')
+      evaluated_system_vars.should match('VCAP_APPLICATION={.*"message vcap_application key":"message vcap_application value".*}')
     end
 
     it "exports VCAP_SERVICES" do
-      exported_system_vars["VCAP_SERVICES"].should match(%r{\"plan\":\"panda\"})
+      evaluated_system_vars.should match('VCAP_SERVICES={.*"plan":"panda".*}')
     end
 
     context "when it has a DB" do
       it "exports DATABASE_URL" do
-        exported_system_vars["DATABASE_URL"].should match("postgres://user:pass@host:5432/db")
+        evaluated_system_vars.should include("DATABASE_URL=postgres://user:pass@host:5432/db")
       end
     end
 
@@ -147,25 +142,98 @@ describe Dea::Env do
       let(:services) { [] }
 
       it "does not export DATABASE_URL" do
-        exported_system_vars.should_not have_key("DATABASE_URL")
+        evaluated_system_vars.should_not include("DATABASE_URL")
+      end
+    end
+
+    describe "escaping" do
+      describe "VCAP_SERVICES" do
+        context "when VCAP_SERVICES contains back-references ($)" do
+          let(:services) { [ service.merge("label" => "p@nda$arecool") ] }
+          it "escapes the back-references so that they are not evaluated" do
+            evaluated_system_vars.should include("p@nda$arecool")
+          end
+        end
+
+        context "when VCAP_SERVICES contains backticks (`)" do
+          let(:services) { [ service.merge("label" => "p`ndasarecool") ] }
+          it "escapes the backticks so that they are not evaluated" do
+            evaluated_system_vars.should include("p`ndasarecool")
+          end
+        end
+
+        context "when VCAP_SERVICES contains single quotes (')" do
+          let(:services) { [ service.merge("label" => "p'ndasarecool") ] }
+          it "escapes the single quotes so that they are not evaluated" do
+            evaluated_system_vars.should include("p'ndasarecool")
+          end
+        end
+      end
+
+      describe "VCAP_APPLICATION" do
+        context "when VCAP_APPLICATION contains back-references ($)" do
+          let(:start_message_vcap_application) { { foo: "p@nda$arecool" } }
+          it "escapes the back-references so that they are not evaluated" do
+            evaluated_system_vars.should include("p@nda$arecool")
+          end
+        end
+
+        context "when VCAP_APPLICATION contains backticks (`)" do
+          let(:start_message_vcap_application) { { foo: "p`nda`arecool" } }
+          it "escapes the backticks so that they are not evaluated" do
+            evaluated_system_vars.should include("p`nda`arecool")
+          end
+        end
+
+        context "when VCAP_APPLICATION contains single quotes (')" do
+          let(:start_message_vcap_application) { { foo: "p'ndasarecool" } }
+          it "escapes the single quotes so that they are not evaluated" do
+            evaluated_system_vars.should include("p'ndasarecool")
+          end
+        end
       end
     end
   end
 
   describe "#exported_user_environment_variables" do
     let(:exported_variables) { env.exported_user_environment_variables }
+    let(:evaluated_user_vars) { `#{exported_variables} env` }
 
     it "includes the user defined variables" do
-      exported_variables["fake_user_provided_key"].should match("fake_user_provided_value")
+      exported_variables.should include("fake_user_provided_key=\"fake_user_provided_value\"")
+    end
+
+    describe "escaping" do
+      describe "when user environment variables refer to other variables" do
+        let(:user_provided_environment) { ["foo=bar", "backref=$foo"] }
+        it "does not escape user provided variables, and therefore expands backreferences" do
+          evaluated_user_vars.should include("backref=bar")
+        end
+      end
     end
   end
 
   describe "exported_environment_variables" do
-    let(:user_provided_environment) { ["PORT=stupid idea"] }
     subject(:env) { Dea::Env.new(start_message, instance, env_exporter) }
 
+    let(:user_provided_environment) { ["PORT=stupid idea"] }
+    let(:evaluated_environment) { `#{env.exported_environment_variables} env` }
+
     it "exports PORT" do
-      env.exported_environment_variables["PORT"].should match("stupid idea")
+      env.exported_environment_variables.should include('PORT="stupid idea"')
+    end
+
+    describe "escaping" do
+      let(:services) { [ service.merge('label' => 'p@nda$s') ] }
+      let(:user_provided_environment) { ["foo=bar", "backref=$foo"] }
+
+      it "escapes system variables" do
+        evaluated_environment.should include('"label":"p@nda$s"')
+      end
+
+      it "does not escape user variables" do
+        evaluated_environment.should include("backref=bar")
+      end
     end
   end
 end
